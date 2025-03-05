@@ -171,7 +171,8 @@ class InstagramBot:
         chrome_options.add_experimental_option("excludeSwitches", ["enable-automation"])
         chrome_options.add_experimental_option('useAutomationExtension', False)
         chrome_options.add_argument('--disable-notifications')
-        
+        chrome_options.add_argument('--headless')  # Headless modda çalıştırma
+
         user_agent = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36'
         chrome_options.add_argument(f'user-agent={user_agent}')
         chrome_options.add_argument('--lang=tr-TR')
@@ -187,7 +188,7 @@ class InstagramBot:
         
         self.wait = WebDriverWait(self.driver, 20)
         self.actions = ActionChains(self.driver)
-        self.driver.maximize_window()
+        self.driver.set_window_size(1920, 1080)
 
     def generate_user_data(self):
         """Rastgele kullanıcı bilgileri oluştur"""
