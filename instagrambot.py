@@ -17,7 +17,6 @@ import random
 import requests
 import json
 import re
-import os
 from datetime import datetime
 from pathlib import Path
 import pyautogui
@@ -25,7 +24,7 @@ import sys
 import warnings
 warnings.filterwarnings("ignore")
 
-# Logging ayarları
+# Logging setup
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(levelname)s - %(message)s',
@@ -48,7 +47,6 @@ class DropMailClient:
         self.api_url = 'https://dropmail.me/api/graphql/web-test-2'
 
     def create_inbox(self):
-        """Yeni bir geçici e-posta oluştur"""
         try:
             query = '''
             mutation {
@@ -62,11 +60,7 @@ class DropMailClient:
             }
             '''
             
-            response = self.session.post(
-                self.api_url,
-                headers=self.headers,
-                json={'query': query}
-            )
+            response = self.session.post(self.api_url, headers=self.headers, json={'query': query})
             
             if response.status_code != 200:
                 raise Exception(f"API error: {response.status_code}")
@@ -90,7 +84,6 @@ class DropMailClient:
             return None
 
     def wait_for_verification_code(self, timeout=300):
-        """E-posta doğrulama kodunu bekle"""
         try:
             start_time = time.time()
             
@@ -114,18 +107,8 @@ class DropMailClient:
                 }
                 '''
                 
-                variables = {
-                    'sessionId': self.session_id
-                }
-
-                response = self.session.post(
-                    self.api_url,
-                    headers=self.headers,
-                    json={
-                        'query': query,
-                        'variables': variables
-                    }
-                )
+                variables = {'sessionId': self.session_id}
+                response = self.session.post(self.api_url, headers=self.headers, json={'query': query, 'variables': variables})
 
                 if response.status_code != 200:
                     logging.error(f"API error: {response.status_code}")
@@ -149,6 +132,9 @@ class DropMailClient:
                     mail_text = mail.get('text', '')
                     subject = mail.get('headerSubject', '')
                     
+                    logging.info(f"Checking mail from: {from_addr}")
+                    logging.info(f"Subject: {subject}")
+                    
                     if 'instagram' in from_addr or 'instagram' in subject.lower():
                         match = re.search(r'\b\d{6}\b', mail_text)
                         if match:
@@ -166,13 +152,96 @@ class DropMailClient:
             logging.error(f"Error getting verification code: {str(e)}")
             return None
 
+class BrowserStealth:
+    """Browser stealth and anti-detection management"""
+    @staticmethod
+    def modify_navigator(driver):
+        """Modify navigator properties"""
+        navigator_modifications = {
+            'webdriver': "undefined",
+            'webdriver_status': False,
+            'chrome_status': False,
+            'driver_status': False,
+            'webdriver_agent_status': False,
+            'selenium_status': False,
+            'domAutomation': False,
+            'domAutomationController': False,
+            'selenium': False,
+            '_Selenium_IDE_Recorder': False,
+            'calledSelenium': False,
+            '_selenium': False,
+            '__webdriver_script_fn': False
+        }
+        
+        for key, value in navigator_modifications.items():
+            driver.execute_script(f"Object.defineProperty(navigator, '{key}', {{get: () => {str(value).lower()}}});")
+
+    @staticmethod
+    def modify_window_properties(driver):
+        """Modify window properties"""
+        window_modifications = {
+            'callPhantom': False,
+            '_phantom': False,
+            'phantom': False,
+            'webdriver': False,
+            '__nightmare': False
+        }
+        
+        for key, value in window_modifications.items():
+            driver.execute_script(f"Object.defineProperty(window, '{key}', {{get: () => {str(value).lower()}}});")
+
+    @staticmethod
+    def add_stealth_scripts(driver):
+        """Add stealth scripts"""
+        stealth_js = """
+        try {
+            // Save original functions
+            const originalNavigatorPrototype = navigator.__proto__;
+            const originalNavigatorPermissionsQuery = window.navigator.permissions.query;
+            
+            // Create a new prototype without webdriver flag
+            const newProto = Object.create(originalNavigatorPrototype);
+            delete newProto.webdriver;
+            
+            // Apply the modified prototype
+            Object.setPrototypeOf(navigator, newProto);
+            
+            // Override permissions query
+            window.navigator.permissions.query = (parameters) => (
+                parameters.name === 'notifications' ?
+                Promise.resolve({state: Notification.permission}) :
+                originalNavigatorPermissionsQuery.call(window.navigator.permissions, parameters)
+            );
+            
+            // Additional evasion techniques
+            Object.defineProperty(navigator, 'plugins', {get: () => [1, 2, 3, 4, 5]});
+            Object.defineProperty(navigator, 'languages', {get: () => ['tr-TR', 'tr', 'en-US', 'en']});
+            
+        } catch (err) {
+            console.log('Stealth script error:', err);
+        }
+        """
+        driver.execute_script(stealth_js)
+
+    @staticmethod
+    def add_mock_elements(driver):
+        """Add mock DOM elements"""
+        mock_elements = [
+            ("div", {"id": "selenium-ide-indicator", "style": "display:none"}),
+            ("div", {"id": "webdriver-indicator", "style": "display:none"}),
+            ("div", {"id": "selenium-indicator", "style": "display:none"})
+        ]
+        for tag, attrs in mock_elements:
+            attrs_str = ' '.join([f'{k}="{v}"' for k, v in attrs.items()])
+            driver.execute_script(f"document.body.insertAdjacentHTML('beforeend', '<{tag} {attrs_str}></{tag}>')")
+
 class ProxyManager:
     def __init__(self):
         self.proxies = self.load_proxies()
         self.failed_proxies = set()
         
     def load_proxies(self):
-        """Proxy listesini dosyadan yükle"""
+        """Load proxy list from file"""
         try:
             with open('proxies.txt', 'r') as f:
                 return [line.strip() for line in f if line.strip() and self.is_valid_proxy_format(line.strip())]
@@ -181,20 +250,18 @@ class ProxyManager:
             return []
     
     def is_valid_proxy_format(self, proxy):
-        """Proxy formatını kontrol et"""
-        # Check for common proxy formats: ip:port or protocol://ip:port
+        """Check proxy format"""
         proxy_pattern = r'^(https?://)?(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}):(\d{1,5})$'
         if re.match(proxy_pattern, proxy):
             ip = re.match(proxy_pattern, proxy).group(2)
             port = re.match(proxy_pattern, proxy).group(3)
-            # Basic IP address validation
             ip_parts = ip.split('.')
             if all(0 <= int(part) <= 255 for part in ip_parts) and 0 < int(port) <= 65535:
                 return True
         return False
             
     def get_random_proxy(self):
-        """Rastgele bir proxy seç"""
+        """Select a random proxy"""
         available_proxies = [p for p in self.proxies if p not in self.failed_proxies]
         if not available_proxies:
             if self.proxies:
@@ -208,7 +275,7 @@ class ProxyManager:
         return proxy
     
     def mark_proxy_as_failed(self, proxy):
-        """Proxy'i başarısız olarak işaretle"""
+        """Mark a proxy as failed"""
         if proxy:
             self.failed_proxies.add(proxy)
             logging.warning(f"Marked proxy as failed: {proxy}")
@@ -233,6 +300,9 @@ class InstagramBot:
                 # Language setting
                 options.add_argument('--lang=tr-TR')
                 
+                # WebRTC handling
+                options.add_argument('--disable-webrtc')
+                
                 # Proxy settings
                 if use_proxy:
                     self.current_proxy = self.proxy_manager.get_random_proxy()
@@ -247,8 +317,8 @@ class InstagramBot:
                 options.add_argument('--disable-features=IsolateOrigins,site-per-process')
                 options.add_argument('--disable-site-isolation-trials')
                 
-                # Initialize Chrome with timeout
-                self.driver = self.initialize_chrome_with_timeout(options)
+                # Initialize undetected-chromedriver
+                self.driver = uc.Chrome(options=options)
                 
                 # Test proxy connection
                 if self.current_proxy:
@@ -302,98 +372,16 @@ class InstagramBot:
         self.actions = ActionChains(self.driver)
         
         # Anti-detection
-        Browser.modify_navigator(self.driver)
-        Browser.modify_window_properties(self.driver)
-        Browser.add_mock_scripts(self.driver)
-        Browser.add_mock_elements(self.driver)
-class InstagramBot:
-    def __init__(self, use_proxy=True):
-        self.fake = Faker('tr_TR')
-        self.dropmail = DropMailClient()
-        self.proxy_manager = ProxyManager()
-        
-        # Undetected Chrome Driver kullanımı
-        options = uc.ChromeOptions()
-        
-        # Gerçek bir kullanıcı aracısı kullan
-        ua = UserAgent()
-        user_agent = ua.random
-        options.add_argument(f'user-agent={user_agent}')
-        
-        # Dil ayarı
-        options.add_argument('--lang=tr-TR')
-        
-        # Proxy kullanımı
-        if use_proxy:
-            proxy = self.proxy_manager.get_random_proxy()
-            if proxy:
-                options.add_argument(f'--proxy-server={proxy}')
-        
-        # Gerçek profil oluştur
-        profile_path = Path.home() / "instagram_bot_profile"
-        options.add_argument(f'--user-data-dir={str(profile_path)}')
-        
-        # WebGL ve Canvas parmak izini rastgele yap
-        options.add_argument('--disable-blink-features=AutomationControlled')
-        
-        # Diğer gizlilik ayarları
-        options.add_argument('--disable-features=IsolateOrigins,site-per-process')
-        options.add_argument('--disable-site-isolation-trials')
-        
-        # Undetected Chrome Driver başlat
-        self.driver = uc.Chrome(options=options)
-        
-        # Pencere boyutu rastgele
-        screen_width = 1920
-        screen_height = 1080
-        window_width = random.randint(1024, screen_width)
-        window_height = random.randint(768, screen_height)
-        self.driver.set_window_size(window_width, window_height)
-        
-        self.wait = WebDriverWait(self.driver, 20)
-        self.actions = ActionChains(self.driver)
-        
-        # Browser anti-detection
-        Browser.modify_navigator(self.driver)
-        Browser.modify_window_properties(self.driver)
-        Browser.add_mock_scripts(self.driver)
-        Browser.add_mock_elements(self.driver)
+        BrowserStealth.modify_navigator(self.driver)
+        BrowserStealth.modify_window_properties(self.driver)
+        BrowserStealth.add_stealth_scripts(self.driver)
+        BrowserStealth.add_mock_elements(self.driver)
 
-    def random_sleep(self, min_time=1, max_time=3):
-        """Random süre bekle"""
-        time.sleep(random.uniform(min_time, max_time))
-
-    def move_mouse_randomly(self):
-        """Fareyi rastgele hareket ettir"""
-        try:
-            viewport_width = self.driver.execute_script("return window.innerWidth;")
-            viewport_height = self.driver.execute_script("return window.innerHeight;")
-            x = random.randint(0, viewport_width)
-            y = random.randint(0, viewport_height)
-            self.actions.move_by_offset(x, y).perform()
-            self.random_sleep(0.2, 0.5)
-        except:
-            pass
-
-    def human_type(self, element, text):
-        """İnsansı yazma davranışı"""
-        for char in text:
-            element.send_keys(char)
-            time.sleep(random.uniform(0.1, 0.3))
-        self.random_sleep()
-
-    def handle_cookie_popup(self):
-        """Çerez popup'ını kabul et"""
-        try:
-            cookie_button = self.driver.find_element(By.XPATH, "//button[contains(text(), 'Tümünü Kabul Et')]")
-            self.move_mouse_randomly()
-            cookie_button.click()
-            self.random_sleep()
-        except:
-            pass
+        # Clear cookies and cache
+        self.driver.delete_all_cookies()
 
     def generate_user_data(self):
-        """Rastgele kullanıcı bilgileri oluştur"""
+        """Generate random user data"""
         username = f"{self.fake.user_name()}_{random.randint(100,999)}".lower()
         password = f"Pass_{self.fake.password(length=10)}#1"
         full_name = self.fake.name()
@@ -404,300 +392,156 @@ class InstagramBot:
         return username, password, full_name
 
     def generate_birth_date(self):
-        """18-50 yaş arası rastgele doğum tarihi oluştur"""
+        """Generate random birth date between 18-50 years old"""
         year = random.randint(1973, 2005)
         month = random.randint(1, 12)
         day = random.randint(1, 28)
         return year, month, day
 
-    def simulate_human_behavior(self):
-        """İnsan davranışlarını simüle et"""
-        # Sayfayı rastgele scroll
-        scroll_amount = random.randint(300, 700)
-        self.driver.execute_script(f"window.scrollBy(0, {scroll_amount});")
-        self.random_sleep(0.5, 1.5)
-        
-        # Fareyi rastgele hareket ettir
-        self.move_mouse_randomly()
-        
-        # Sayfayı yukarı kaydır
-        self.driver.execute_script("window.scrollTo(0, 0);")
-        self.random_sleep(0.5, 1)
+    def random_sleep(self, min_time=1, max_time=3):
+        """Random sleep"""
+        time.sleep(random.uniform(min_time, max_time))
 
-    def post_registration_actions(self):
-        """Hesap oluşturulduktan sonra gerçek kullanıcı davranışları"""
+    def human_type(self, element, text):
+        """Human-like typing behavior"""
+        for char in text:
+            element.send_keys(char)
+            time.sleep(random.uniform(0.1, 0.3))
+        self.random_sleep()
+
+    def move_mouse_randomly(self):
+        """Move mouse randomly"""
         try:
-            # Profil fotoğrafı yükle
-            self.upload_profile_photo()
-            
-            # Birkaç popüler hesabı takip et
-            self.follow_popular_accounts()
-            
-            # Bio güncelle
-            self.update_bio()
-            
-            # Hikayelere göz at
-            self.view_stories()
-            
-            # Keşfet sayfasında gezin
-            self.browse_explore_page()
-            
-        except Exception as e:
-            logging.error(f"Error in post registration actions: {str(e)}")
+            viewport_width = self.driver.execute_script("return window.innerWidth;")
+            viewport_height = self.driver.execute_script("return window.innerHeight;")
+            x = random.randint(0, viewport_width)
+            y = random.randint(0, viewport_height)
+            self.actions.move_by_offset(x, y).perform()
+            self.random_sleep(0.2, 0.5)
+        except:
+            pass
 
-    def upload_profile_photo(self):
-        """Profil fotoğrafı yükle"""
+    def handle_cookie_popup(self):
+        """Handle cookie popup"""
         try:
-            # Profil sayfasına git
-            self.driver.get(f"https://www.instagram.com/accounts/edit/")
-            self.random_sleep(2, 4)
-            
-            # Profil fotoğrafı değiştir butonu
-            change_photo_button = self.wait.until(EC.presence_of_element_located(
-                (By.XPATH, "//button[contains(text(), 'Fotoğrafı Değiştir')]")))
+            cookie_button = self.driver.find_element(By.XPATH, "//button[contains(text(), 'Tümünü Kabul Et')]")
             self.move_mouse_randomly()
-            change_photo_button.click()
-            self.            random_sleep(1, 2)
-            
-            # Profil fotoğrafını yükle
-            photo_path = os.path.join('profile_photos', random.choice(os.listdir('profile_photos')))
-            pyautogui.write(str(Path(photo_path).absolute()))
-            pyautogui.press('enter')
-            self.random_sleep(3, 5)
-            
-        except Exception as e:
-            logging.error(f"Error uploading profile photo: {str(e)}")
-
-    def follow_popular_accounts(self):
-        """Popüler hesapları takip et"""
-        popular_accounts = ['instagram', 'cristiano', 'leomessi', 'beyonce', 'arianagrande']
-        random.shuffle(popular_accounts)
-        
-        for account in popular_accounts[:3]:  # Rastgele 3 hesap takip et
-            try:
-                self.driver.get(f"https://www.instagram.com/{account}/")
-                self.random_sleep(2, 4)
-                
-                follow_button = self.wait.until(EC.presence_of_element_located(
-                    (By.XPATH, "//button[contains(., 'Takip Et')]")))
-                self.move_mouse_randomly()
-                follow_button.click()
-                self.random_sleep(3, 5)
-                
-            except Exception as e:
-                logging.error(f"Error following {account}: {str(e)}")
-                continue
-
-    def update_bio(self):
-        """Profil biyografisini güncelle"""
-        try:
-            self.driver.get("https://www.instagram.com/accounts/edit/")
-            self.random_sleep(2, 4)
-            
-            bio_input = self.wait.until(EC.presence_of_element_located(
-                (By.ID, "pepBio")))
-            
-            bio_text = self.generate_bio()
-            self.move_mouse_randomly()
-            self.human_type(bio_input, bio_text)
-            
-            submit_button = self.wait.until(EC.element_to_be_clickable(
-                (By.XPATH, "//button[contains(text(), 'Gönder')]")))
-            self.move_mouse_randomly()
-            submit_button.click()
-            self.random_sleep(2, 3)
-            
-        except Exception as e:
-            logging.error(f"Error updating bio: {str(e)}")
-
-    def generate_bio(self):
-        """Rastgele biyografi oluştur"""
-        bios = [
-            "🌟 Hayat güzeldir",
-            "📸 Fotoğraf tutkunu",
-            "🎵 Müzik = Hayat",
-            "✨ Pozitif enerji",
-            "🌍 Gezgin ruh",
-            "💫 Hayal et ve başar",
-            "🎨 Sanat aşığı",
-            "📚 Kitap kurdu"
-        ]
-        return random.choice(bios)
-
-    def view_stories(self):
-        """Hikayeleri görüntüle"""
-        try:
-            self.driver.get("https://www.instagram.com")
-            self.random_sleep(3, 5)
-            
-            # İlk hikayeye tıkla
-            story = self.wait.until(EC.presence_of_element_located(
-                (By.XPATH, "//div[@class='_aac4 _aac5 _aac6']")))
-            self.move_mouse_randomly()
-            story.click()
-            
-            # Birkaç hikaye izle
-            for _ in range(random.randint(3, 7)):
-                self.random_sleep(2, 4)
-                # Sonraki hikayeye geç
-                self.actions.send_keys(Keys.ARROW_RIGHT).perform()
-            
-            # Hikayeleri kapat
-            self.actions.send_keys(Keys.ESCAPE).perform()
-            self.random_sleep(1, 2)
-            
-        except Exception as e:
-            logging.error(f"Error viewing stories: {str(e)}")
-
-    def browse_explore_page(self):
-        """Keşfet sayfasında gezin"""
-        try:
-            self.driver.get("https://www.instagram.com/explore/")
-            self.random_sleep(3, 5)
-            
-            # Sayfayı rastgele scroll
-            for _ in range(random.randint(3, 7)):
-                scroll_amount = random.randint(300, 700)
-                self.driver.execute_script(f"window.scrollBy(0, {scroll_amount});")
-                self.random_sleep(1, 3)
-            
-        except Exception as e:
-            logging.error(f"Error browsing explore page: {str(e)}")
-
-    def fill_registration_form(self, email, full_name, username, password):
-        """Kayıt formunu doldur"""
-        fields = {
-            "emailOrPhone": email,
-            "fullName": full_name,
-            "username": username,
-            "password": password
-        }
-        
-        for field_name, value in fields.items():
-            field = self.wait.until(EC.presence_of_element_located((By.NAME, field_name)))
-            self.move_mouse_randomly()
-            self.human_type(field, value)
-            self.random_sleep(0.5, 1.5)
-
-    def fill_birth_date(self):
-        """Doğum tarihi formunu doldur"""
-        try:
-            year, month, day = self.generate_birth_date()
-            
-            # Ay seçimi
-            month_select = self.wait.until(EC.presence_of_element_located(
-                (By.XPATH, "//select[@title='Ay:']")))
-            self.move_mouse_randomly()
-            month_select.click()
+            cookie_button.click()
             self.random_sleep()
-            month_option = self.wait.until(EC.presence_of_element_located(
-                (By.XPATH, f"//option[@value='{month}']")))
-            month_option.click()
-            
-            # Gün seçimi
-            day_select = self.wait.until(EC.presence_of_element_located(
-                (By.XPATH, "//select[@title='Gün:']")))
-            self.move_mouse_randomly()
-            day_select.click()
-            self.random_sleep()
-            day_option = self.wait.until(EC.presence_of_element_located(
-                (By.XPATH, f"//option[@value='{day}']")))
-            day_option.click()
-            
-            # Yıl seçimi
-            year_select = self.wait.until(EC.presence_of_element_located(
-                (By.XPATH, "//select[@title='Yıl:']")))
-            self.move_mouse_randomly()
-            year_select.click()
-            self.random_sleep()
-            year_option = self.wait.until(EC.presence_of_element_located(
-                (By.XPATH, f"//option[@value='{year}']")))
-            year_option.click()
-            
-            self.random_sleep(1, 2)
-            
-            # İleri butonuna tıkla
-            next_button = self.wait.until(EC.element_to_be_clickable(
-                (By.XPATH, "//button[text()='İleri']")))
-            self.move_mouse_randomly()
-            next_button.click()
-            self.random_sleep(2, 4)
-            
-        except Exception as e:
-            logging.error(f"Error filling birth date: {str(e)}")
-            raise
+        except:
+            pass
 
     def create_account(self):
         try:
-            # Email oluştur
+            # Create email
             email = self.dropmail.create_inbox()
             if not email:
                 raise Exception("Failed to create email inbox")
 
-            # Kullanıcı bilgilerini oluştur
+            # Generate user data
             username, password, full_name = self.generate_user_data()
             
-            # Instagram'ı aç
+            # Open Instagram
             self.driver.get("https://www.instagram.com")
             self.random_sleep(3, 5)
             
-            # Çerez popup'ını kontrol et
+            # Handle cookie popup
             self.handle_cookie_popup()
 
-            # Kaydol butonuna tıkla
-            signup_link = self.wait.until(EC.element_to_be_clickable(
-                (By.XPATH, "//span[text()='Kaydol']")))
+            # Click sign up button
+            signup_link = self.wait.until(EC.element_to_be_clickable((By.XPATH, "//span[text()='Kaydol']")))
             self.move_mouse_randomly()
             signup_link.click()
             self.random_sleep(2, 4)
 
-            # Form alanlarını doldur
-            self.fill_registration_form(email, full_name, username, password)
-            
-            # Doğum tarihi ekranı
-            self.fill_birth_date()
-            
-            # Doğrulama kodunu bekle ve gir
-            if not self.handle_verification(email):
-                raise Exception("Verification failed")
-            
-            # Hesap oluşturulduktan sonraki işlemler
-            self.random_sleep(5, 8)
-            self.post_registration_actions()
+            # Fill in form fields
+            email_input = self.wait.until(EC.presence_of_element_located((By.NAME, "emailOrPhone")))
+            fullname_input = self.wait.until(EC.presence_of_element_located((By.NAME, "fullName")))
+            username_input = self.wait.until(EC.presence_of_element_located((By.NAME, "username")))
+            password_input = self.wait.until(EC.presence_of_element_located((By.NAME, "password")))
 
-            # Hesap bilgilerini kaydet
+            self.move_mouse_randomly()
+            self.human_type(email_input, email)
+            
+            self.move_mouse_randomly()
+            self.human_type(fullname_input, full_name)
+            
+            self.move_mouse_randomly()
+            self.human_type(username_input, username)
+            
+            self.move_mouse_randomly()
+            self.human_type(password_input, password)
+
+            self.random_sleep(1, 2)
+
+            # Click sign up button
+            submit_button = self.wait.until(EC.element_to_be_clickable((By.XPATH, "//button[@type='submit']")))
+            self.move_mouse_randomly()
+            submit_button.click()
+            self.random_sleep(3, 5)
+
+            # Birthdate selection
+            year, month, day = self.generate_birth_date()
+            
+            # Select month
+            month_select = self.wait.until(EC.presence_of_element_located((By.XPATH, "//select[@title='Ay:']")))
+            self.move_mouse_randomly()
+            month_select.click()
+            self.random_sleep()
+            month_option = self.wait.until(EC.presence_of_element_located((By.XPATH, f"//option[@value='{month}']")))
+            month_option.click()
+            
+            # Select day
+            day_select = self.wait.until(EC.presence_of_element_located((By.XPATH, "//select[@title='Gün:']")))
+            self.move_mouse_randomly()
+            day_select.click()
+            self.random_sleep()
+            day_option = self.wait.until(EC.presence_of_element_located((By.XPATH, f"//option[@value='{day}']")))
+            day_option.click()
+            
+            # Select year
+            year_select = self.wait.until(EC.presence_of_element_located((By.XPATH, "//select[@title='Yıl:']")))
+            self move_mouse_randomly()
+            year_select click()
+            self.random_sleep()
+            year_option = self.wait.until(EC.presence_of_element_located((By.XPATH, f"//option[@value='{year}']")))
+            year_option.click()
+
+                        # Click next button
+            next_button = self.wait.until(EC.element_to_be_clickable((By.XPATH, "//button[text()='İleri']")))
+            self.move_mouse_randomly()
+            next_button.click()
+            self.random_sleep(3, 5)
+
+            # Wait for verification code page
+            code_input = self.wait.until(EC.presence_of_element_located((By.NAME, "email_confirmation_code")))
+            logging.info("Waiting for verification code...")
+
+            # Wait for verification code and enter it
+            verification_code = self.dropmail.wait_for_verification_code()
+            if not verification_code:
+                raise Exception("Failed to get verification code")
+
+            self.move_mouse_randomly()
+            self.human_type(code_input, verification_code)
+            self.random_sleep(1, 2)
+            code_input.send_keys(Keys.RETURN)
+            self.random_sleep(4, 6)
+
+            # Save account details
             self.save_account(email, username, password, full_name)
             logging.info("Account created successfully!")
             return True
 
         except Exception as e:
             logging.error(f"Error during account creation: {str(e)}")
-            self.take_error_screenshot()
-            return False
-
-    def handle_verification(self, email):
-        """Doğrulama kodunu işle"""
-        try:
-            code_input = self.wait.until(EC.presence_of_element_located(
-                (By.NAME, "email_confirmation_code")))
-            verification_code = self.dropmail.wait_for_verification_code()
-            
-            if not verification_code:
-                return False
-                
-            self.move_mouse_randomly()
-            self.human_type(code_input, verification_code)
-            self.random_sleep(1, 2)
-            code_input.send_keys(Keys.RETURN)
-            self.random_sleep(4, 6)
-            return True
-            
-        except Exception as e:
-            logging.error(f"Error during verification: {str(e)}")
+            screenshot_path = f"error_{datetime.now().strftime('%Y%m%d_%H%M%S')}.png"
+            self.driver.save_screenshot(screenshot_path)
+            logging.error(f"Error screenshot saved to: {screenshot_path}")
             return False
 
     def save_account(self, email, username, password, full_name):
-        """Hesap bilgilerini kaydet"""
+        """Save account details"""
         try:
             with open('instagram_accounts.txt', 'a', encoding='utf-8') as f:
                 f.write(f"\nRegistration Time: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
@@ -710,21 +554,8 @@ class InstagramBot:
         except Exception as e:
             logging.error(f"Error saving account details: {str(e)}")
 
-    def take_error_screenshot(self):
-        """Hata durumunda ekran görüntüsü al"""
-        try:
-            screenshot_dir = Path("error_screenshots")
-            screenshot_dir.mkdir(exist_ok=True)
-            
-            screenshot_path = screenshot_dir / f"error_{datetime.now().strftime('%Y%m%d_%H%M%S')}.png"
-            self.driver.save_screenshot(str(screenshot_path))
-            logging.error(f"Error screenshot saved to: {screenshot_path}")
-            
-        except Exception as e:
-            logging.error(f"Error taking screenshot: {str(e)}")
-
     def close(self):
-        """Tarayıcıyı kapat"""
+        """Close browser"""
         try:
             if self.driver:
                 self.driver.quit()
@@ -732,12 +563,12 @@ class InstagramBot:
             logging.error(f"Error closing driver: {str(e)}")
 
 def main():
-    """Ana program döngüsü"""
+    """Main program loop"""
     logging.info("Starting Instagram Account Creator with Anti-Detection...")
     
     bot = None
     try:
-        bot = InstagramBot(use_proxy=True)
+        bot = InstagramBot()
         max_attempts = 3
         current_attempt = 0
         
@@ -751,14 +582,14 @@ def main():
                 else:
                     current_attempt += 1
                     if current_attempt < max_attempts:
-                        wait_time = random.randint(300, 600)  # 5-10 dakika bekle
+                        wait_time = random.randint(30, 60)  # 5-10 minutes
                         logging.info(f"Retrying in {wait_time} seconds...")
                         time.sleep(wait_time)
             except Exception as e:
                 logging.error(f"Error during attempt {current_attempt + 1}: {str(e)}")
                 current_attempt += 1
                 if current_attempt < max_attempts:
-                    wait_time = random.randint(600, 900)  # 10-15 dakika bekle
+                    wait_time = random.randint(60, 120)  # 10-15 minutes
                     logging.info(f"Retrying in {wait_time} seconds...")
                     time.sleep(wait_time)
         
