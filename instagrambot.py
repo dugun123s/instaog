@@ -169,93 +169,143 @@ class DropMailClient:
 class ProxyManager:
     def __init__(self):
         self.proxies = self.load_proxies()
+        self.failed_proxies = set()
         
     def load_proxies(self):
         """Proxy listesini dosyadan yükle"""
         try:
             with open('proxies.txt', 'r') as f:
-                return [line.strip() for line in f if line.strip()]
+                return [line.strip() for line in f if line.strip() and self.is_valid_proxy_format(line.strip())]
         except FileNotFoundError:
             logging.warning("proxies.txt file not found. Running without proxies.")
             return []
+    
+    def is_valid_proxy_format(self, proxy):
+        """Proxy formatını kontrol et"""
+        # Check for common proxy formats: ip:port or protocol://ip:port
+        proxy_pattern = r'^(https?://)?(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}):(\d{1,5})$'
+        if re.match(proxy_pattern, proxy):
+            ip = re.match(proxy_pattern, proxy).group(2)
+            port = re.match(proxy_pattern, proxy).group(3)
+            # Basic IP address validation
+            ip_parts = ip.split('.')
+            if all(0 <= int(part) <= 255 for part in ip_parts) and 0 < int(port) <= 65535:
+                return True
+        return False
             
     def get_random_proxy(self):
         """Rastgele bir proxy seç"""
-        if self.proxies:
-            return random.choice(self.proxies)
-        return None
+        available_proxies = [p for p in self.proxies if p not in self.failed_proxies]
+        if not available_proxies:
+            if self.proxies:
+                logging.warning("All proxies have failed. Resetting failed proxies list.")
+                self.failed_proxies.clear()
+                available_proxies = self.proxies
+            else:
+                return None
+                
+        proxy = random.choice(available_proxies)
+        return proxy
+    
+    def mark_proxy_as_failed(self, proxy):
+        """Proxy'i başarısız olarak işaretle"""
+        if proxy:
+            self.failed_proxies.add(proxy)
+            logging.warning(f"Marked proxy as failed: {proxy}")
 
-class Browser:
-    """Tarayıcı parmak izi yönetimi"""
-    @staticmethod
-    def modify_navigator(driver):
-        """Navigator özelliklerini modifiye et"""
-        navigator_modifications = {
-            'webdriver': "undefined",
-            'webdriver_status': False,
-            'chrome_status': False,
-            'driver_status': False,
-            'webdriver_agent_status': False,
-            'selenium_status': False,
-            'domAutomation': False,
-            'domAutomationController': False,
-            'selenium': False,
-            '_Selenium_IDE_Recorder': False,
-            'calledSelenium': False,
-            '_selenium': False,
-            '__webdriver_script_fn': False
-        }
+class InstagramBot:
+    def __init__(self, use_proxy=True):
+        self.fake = Faker('tr_TR')
+        self.dropmail = DropMailClient()
+        self.proxy_manager = ProxyManager()
+        self.current_proxy = None
         
-        for key, value in navigator_modifications.items():
-            driver.execute_script(f"Object.defineProperty(navigator, '{key}', "
-                                f"{{get: () => {str(value).lower()}}});")
+        tries = 3  # Maximum number of proxy attempts
+        for attempt in range(tries):
+            try:
+                options = uc.ChromeOptions()
+                
+                # User agent settings
+                ua = UserAgent()
+                user_agent = ua.random
+                options.add_argument(f'user-agent={user_agent}')
+                
+                # Language setting
+                options.add_argument('--lang=tr-TR')
+                
+                # Proxy settings
+                if use_proxy:
+                    self.current_proxy = self.proxy_manager.get_random_proxy()
+                    if self.current_proxy:
+                        logging.info(f"Attempting to connect with proxy: {self.current_proxy}")
+                        options.add_argument(f'--proxy-server={self.current_proxy}')
+                
+                # Profile and other settings
+                profile_path = Path.home() / "instagram_bot_profile"
+                options.add_argument(f'--user-data-dir={str(profile_path)}')
+                options.add_argument('--disable-blink-features=AutomationControlled')
+                options.add_argument('--disable-features=IsolateOrigins,site-per-process')
+                options.add_argument('--disable-site-isolation-trials')
+                
+                # Initialize Chrome with timeout
+                self.driver = self.initialize_chrome_with_timeout(options)
+                
+                # Test proxy connection
+                if self.current_proxy:
+                    self.test_proxy_connection()
+                
+                # If we get here, the proxy is working
+                break
+                
+            except Exception as e:
+                logging.error(f"Failed to initialize with proxy (attempt {attempt + 1}/{tries}): {str(e)}")
+                if self.current_proxy:
+                    self.proxy_manager.mark_proxy_as_failed(self.current_proxy)
+                if attempt == tries - 1:  # Last attempt
+                    raise Exception("Failed to initialize browser with any proxy")
+                continue
+            
+        # Set up other properties
+        self.setup_browser_properties()
 
-    @staticmethod
-    def modify_window_properties(driver):
-        """Window özelliklerini modifiye et"""
-        window_modifications = {
-            'callPhantom': False,
-            '_phantom': False,
-            'phantom': False,
-            'webdriver': False,
-            '__nightmare': False
-        }
+    def initialize_chrome_with_timeout(self, options, timeout=30):
+        """Initialize Chrome with timeout"""
+        def _init_chrome():
+            return uc.Chrome(options=options)
         
-        for key, value in window_modifications.items():
-            driver.execute_script(f"Object.defineProperty(window, '{key}', "
-                                f"{{get: () => {str(value).lower()}}});")
+        with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
+            future = executor.submit(_init_chrome)
+            try:
+                return future.result(timeout=timeout)
+            except concurrent.futures.TimeoutError:
+                raise Exception("Chrome initialization timed out")
 
-    @staticmethod
-    def add_mock_scripts(driver):
-        """Sahte script elemanları ekle"""
-        mock_scripts = [
-            "const newProto = navigator.__proto__;",
-            "delete newProto.webdriver;",
-            "navigator.__proto__ = newProto;",
-            "const originalQuery = window.navigator.permissions.query;",
-            "window.navigator.permissions.query = (parameters) => (",
-            "    parameters.name === 'notifications' ?",
-            "    Promise.resolve({state: Notification.permission}) :",
-            "    originalQuery(parameters)",
-            ");"
-        ]
-        for script in mock_scripts:
-            driver.execute_script(script)
+    def test_proxy_connection(self):
+        """Test proxy connection by loading a test page"""
+        try:
+            self.driver.set_page_load_timeout(30)
+            self.driver.get("https://www.google.com")
+        except Exception as e:
+            raise Exception(f"Proxy connection test failed: {str(e)}")
 
-    @staticmethod
-    def add_mock_elements(driver):
-        """Sahte DOM elemanları ekle"""
-        mock_elements = [
-            ("div", {"id": "selenium-ide-indicator", "style": "display:none"}),
-            ("div", {"id": "webdriver-indicator", "style": "display:none"}),
-            ("div", {"id": "selenium-indicator", "style": "display:none"})
-        ]
-        for tag, attrs in mock_elements:
-            attrs_str = ' '.join([f'{k}="{v}"' for k, v in attrs.items()])
-            driver.execute_script(
-                f"document.body.insertAdjacentHTML('beforeend', '<{tag} {attrs_str}></{tag}>')"
-            )
-
+    def setup_browser_properties(self):
+        """Set up browser properties after successful initialization"""
+        # Window size
+        screen_width = 1920
+        screen_height = 1080
+        window_width = random.randint(1024, screen_width)
+        window_height = random.randint(768, screen_height)
+        self.driver.set_window_size(window_width, window_height)
+        
+        # Wait and actions
+        self.wait = WebDriverWait(self.driver, 20)
+        self.actions = ActionChains(self.driver)
+        
+        # Anti-detection
+        Browser.modify_navigator(self.driver)
+        Browser.modify_window_properties(self.driver)
+        Browser.add_mock_scripts(self.driver)
+        Browser.add_mock_elements(self.driver)
 class InstagramBot:
     def __init__(self, use_proxy=True):
         self.fake = Faker('tr_TR')
