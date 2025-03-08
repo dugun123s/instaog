@@ -501,8 +501,8 @@ class InstagramBot:
             
             # Select year
             year_select = self.wait.until(EC.presence_of_element_located((By.XPATH, "//select[@title='Yıl:']")))
-            self move_mouse_randomly()
-            year_select click()
+            self.move_mouse_randomly()
+            year_select.click()
             self.random_sleep()
             year_option = self.wait.until(EC.presence_of_element_located((By.XPATH, f"//option[@value='{year}']")))
             year_option.click()
